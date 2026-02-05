@@ -18,20 +18,17 @@ def procesar_para_plantilla(archivo_bytes, codigos_manuales={}):
     for fila in lector:
         linea_unida = "|".join(fila)
         
+        # 1. Identificar Empleado y Limpiar Nombre
         if "Empleado" in linea_unida:
             match_id = re.search(r'(\d{7,12})', linea_unida.replace('|', '').replace('.', ''))
             if match_id:
                 id_val = match_id.group(1)
                 if id_val not in resultados:
-                    # Lógica de limpieza de nombre original
                     texto_nombre = " ".join(fila)
                     nombre_solo_letras = texto_nombre.replace("Empleado", "").replace(id_val, "")
                     nombre_final = re.sub(r'[^a-zA-Z\s]', '', nombre_solo_letras).strip().upper()
                     
-                    if len(nombre_final) < 3:
-                        nombre_final = next((c.strip() for c in fila if len(re.sub(r'[^a-zA-Z]', '', c)) > 10), "DESCONOCIDO")
-
-                    data = {
+                    resultados[id_val] = {
                         'N°': len(resultados) + 1,
                         'NOMBRE': nombre_final,
                         'CEDULA': id_val,
@@ -42,19 +39,27 @@ def procesar_para_plantilla(archivo_bytes, codigos_manuales={}):
                         'DEDUCIDO FUNERARIA SAN NICOLAS': 0.0,
                         'DEDUCIDO CORPODIMA': 0.0,
                         'DEDUCIDO CASINO MIRAFLOREZ': 0.0,
+                        'TRABAJO OCASIONAL': 0.0 # Nueva columna activa
                     }
-                    # Añadir espacios para los códigos manuales
                     for nombre_col in codigos_manuales.values():
-                        data[nombre_col] = 0.0
-                    
-                    data['VALOR A PAGAR'] = 0.0
-                    resultados[id_val] = data
+                        resultados[id_val][nombre_col] = 0.0
                 id_actual = id_val
 
         if not id_actual: continue
+        
         montos = [limpiar_monto(c) for c in fila if "," in c and re.search(r'\d', c)]
         
-        # Conceptos fijos
+        # --- LÓGICA DE TRABAJO OCASIONAL (Sábados, Domingos, Festivos) ---
+        # Si la fila menciona un día de fin de semana o festivo
+        dias_ocasionales = ["sábado", "domingo", "festivo", "dominical"]
+        if any(dia in linea_unida.lower() for dia in dias_ocasionales):
+            # NO tomamos el monto si la descripción es SOLO el nombre del día (ej: "1FESTIVO")
+            # Pero SI sumamos los valores de labores realizadas esos días
+            if not re.search(r'^\d?(FESTIVO|DOMINICAL|DOMINGO|SABADO)$', linea_unida.strip().upper()):
+                if montos:
+                    resultados[id_actual]['TRABAJO OCASIONAL'] += montos[-1]
+
+        # --- CONCEPTOS FIJOS Y TOTALES ---
         if "5059" in linea_unida: resultados[id_actual]['DEDUCIDO SINDICATO'] = montos[-1]
         elif "3802" in linea_unida: resultados[id_actual]['DEDUCIDO FUNERARIA SAN NICOLAS'] = montos[-1]
         elif "3600" in linea_unida: resultados[id_actual]['DEDUCIDO CASINO MIRAFLOREZ'] = montos[-1]
@@ -66,9 +71,10 @@ def procesar_para_plantilla(archivo_bytes, codigos_manuales={}):
         elif "VALOR TOTAL DESCUENTOS" in linea_unida and montos:
             resultados[id_actual]['DEDUCIDO'] = montos[0]
 
-        # Conceptos manuales añadidos por el usuario
+        # Conceptos manuales desde la interfaz
         for cod, nombre_col in codigos_manuales.items():
             if cod in linea_unida and montos:
                 resultados[id_actual][nombre_col] = montos[-1]
 
     return pd.DataFrame(resultados.values())
+
